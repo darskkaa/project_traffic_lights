@@ -21,7 +21,7 @@
 .equ      BTN_DOWN = PIND3
  ;PROGRAM STATE ENUM   
 .equ       ST_WAIT_INP = 1
-.equ      ST_START_BLINK -2
+.equ      ST_START_BLINK = 2
 .equ      ST_BLINK_ON = 2
 .equ      ST_BLINK_OFF = 3
           ;GLOBAL VARS
@@ -29,9 +29,10 @@
 .equ      blinkCount = 0x0101
 .equ      blinkCounter = 0x0102
 .equ      ledTimer = 0x0103
+.equ      timerFlag     = 0x0104
 .equ      buttonBounce = 0x0105
 
-..def     temp = r16
+.def     temp = r16
 .def      retState = r17
 
 ;:Vector table
@@ -46,7 +47,7 @@
  .org INT1addr
           jmp       btn_down_ISR
           
-.org Oc0addr
+.org OC0Aaddr  
           jmp tm0_ISR  
 .org INT_VECTORS_SIZE
 
@@ -60,7 +61,7 @@ main:
 
           call gpio_setup
 
-          call tm0_setip
+          call tm0_setup
           call f_start_blink
           sei
 
@@ -124,7 +125,7 @@ gpio_setup:
           sbi       EIMSK, INT1
           ori       r20, INT1_FALL
 
-          sts       EIRCA, r20
+         sts       EICRA, r20
           ret
 tm0_setup:
 .equ CLK_NO = (1<<CS10)                ;0        0         1
@@ -188,7 +189,7 @@ f_blink_on:
           sbi       PORTB, LED_PIN
 
           lds       temp, ledTimer
-          tst       ledTimer
+          tst       temp
           brne      blink_on_ret
 
           call      f_reset_timer
@@ -214,8 +215,9 @@ f_blink_off:
 
           cbi       PORTB, LED_PIN
 
-          lds       temp, ledTimer
-          tst       ledTimer
+          lds     temp, ledTimer 
+          tst     temp            
+
           brne      blink_off_ret
 
           lds       temp, blinkCounter
@@ -265,7 +267,7 @@ chk_bounce:
           dec       temp
           sts       buttonBounce, temp
 
-tm_0_ret:
+tm0_ret:
 
           clr       temp
           out       TCNT0, temp
@@ -288,12 +290,12 @@ btn_up_ISR:
           ldi       temp, BTN_BOUNCE
           sts       buttonBounce, temp
 
-          lds       temp, blinkCOunt
+    lds     temp, blinkCount      
           cpi       temp, MAX_BLINK
           brsh      btn_up_blink
 
           inc       temp
-          sts       blinkCount, temo
+          sts       blinkCount, temp
 
 btn_up_blink:
           ldi    retSTate, ST_START_BLINK
