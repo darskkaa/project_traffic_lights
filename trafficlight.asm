@@ -122,12 +122,45 @@ red_done;
   rjmp main_loop                     ; back to main 
 
 
+;switch light to green after red
+to_green:
+cbi PORTB, RED_LED                     ;turn off red led
+ldi stateReg, ST_GREEN                              ;set state to green 
+ldi phaseReg, GREEN_QTR         ;time for green
+sbi PORTB, LED_GRN                    ;turn on green led
+rjmp main_loop                              
+ 
+green_done:
+cbi PORTB, LED_GRN                    ;turn off green led
+ldi stateReg, ST_YELLOw                              ;set state to yellow
+ldi phaseReg, YEL_QTR                    ;set time for yellow dureation
+rjmp main_loop
+
+yellow_done:
+cbi          PORTB, LED_YEL                    ;turn off yellow led
+ldi stateReg, ST_RED                    ; go back to red
+ldi phaseReg, RED_QTR                    ;set duration for red 5s
+sbi PORTB, LED_RED
+rjmp main loop
 
 
-; so we need to poll button?
-;check timer if not red valid anymore
-go to next state
-; if not in either red green yellow its in walk
+walk_done:
+cbi PORTB, LED_RED                    ;turn off red led
+cbi          PORTD, LED_WALK                    ;turn off led for ped
+ldi stateReg, ST_GREEN                              ;go to green state
+ldi phaseREg, GREEN_QTR                    ;set green duration
+sbu PORTB, LED_GRN                    ;turn on green led
+
+
+
+;so for the isr we will just set the timer flag 
+
+tm1_ISR:
+ldi temp , 1                              ;
+mov ?? im a little confused should we move the tickflag or 
+reti
+
+
 
 
 
