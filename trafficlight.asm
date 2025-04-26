@@ -28,10 +28,10 @@
 
 ;global vars
 ; -----------------------------------------------------------------------------
-.def stateReg = r18    ; current state of light val
-.def  tickReg = r19    ;how many ticks left in curr state
-.def walkReg= r20    ;register for button press
-.def tickFlag = r21      ;.25s using ctc mode
+.def currentstateReg = r18    ; current state of light val
+.def  phaseReg = r19    ;how many ticks left in curr state
+.def walkFlagReg= r20    ;register for button press
+.def tickFlagReg = r21      ;.25s using ctc mode
 .def temp = r16     ;temp register
 ;---------------------------------------------------
 
@@ -87,13 +87,42 @@ sbi  PORTD, BUTTON_P      ;enable pull up if set, ie 1
 ;load current registers
 
 ldi  stateReg, ST_RED    ;start sequence in red
-ldi  tickReg, RED_QTR      ;set the timer for 5s
-clr walkReg    ;no walk can be called yet
-clr  tickFlag    ;clr all timer/ tick
+ldi  phaseReg, RED_QTR      ;set the timer for 5s
+clr walkFlagReg    ;no walk can be called yet
+clr  tickFlagReg    ;clr all timer/ tick
 
 sei
 
-main_loop
+main_loop:
+
+
+;ceck if putton is low, pressed, set the ped flag
+sbis          PIND. BUTTON_P                    l if its set, skip the next instruction
+ldi          walkRequestReg ,1                     ; executes when pind is pulled low, 0
+dec           phaseReg
+brne          main_loop
+Phase timer, timer left in this light, reached zero, branch based on current state, 
+  cpi stateReg, ST_RED
+  breq red_done
+  cpi stateReg, ST_GREEN
+  breq green_done
+  cpi stateReg, ST_YELLOW
+  breq yellow_done
+  rjmp walk_done                     ; otherwise we must be in walk
+
+red_done;
+          tst          walkFlagReg                    ; was the ped requested
+          breq to_green                    ;if not go to green
+; if so enter walk phase
+  clr walkFlagReg                    ; clear request
+  ldi stateReg, ST_WALK              ; update state
+  ldi phaseReg, WALK_QTR             ; set walk time
+  sbi PORTB, LED_RED                 ; keep red on 
+  sbi PORTD, LED_WALK                ; turn on pedestrian led
+  rjmp main_loop                     ; back to main 
+
+
+
 
 ; so we need to poll button?
 ;check timer if not red valid anymore
