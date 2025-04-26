@@ -28,7 +28,7 @@
 
 ;global vars
 ; -----------------------------------------------------------------------------
-.def currentstateReg = r18    ; current state of light val
+.def currentstateReg  = r18    ; current state of light val
 .def  phaseReg = r19    ;how many ticks left in curr state
 .def walkFlagReg= r20    ;register for button press
 .def tickFlagReg = r21      ;.25s using ctc mode
@@ -39,21 +39,21 @@
 ;---------------------------------------------------
 
 .org      0x0000
-          rjmp       
+          rjmp    gpio_setup
 
 
           
-.org Oc01Aaddr            
-          rjmp tm0_ISR  
+.org OC1Aaddr
+rjmp tm1_ISR  
 .org INT_VECTORS_SIZE
 
 ;---------------------------------------------------
-;gpio setup
+gpio_setup:
 ;---------------------------------------------------
 ;config the output for pb0-3 into temp using 
 ;bitshift wise operator
-ldi  tmp, (1<<LED_RED) | (1<<LED_YEL) | (1<<LED_GRN)
-out  DDRB, tmp    ;set bits ready for outputs
+ldi  temp, (1<<LED_RED) | (1<<LED_YEL) | (1<<LED_GRN)
+out  DDRB, temp    ;set bits ready for outputs
 
 sbi  DDRD, LED_WALK      ;led on
 cbi  PORTD, LED_WALK    ;led off
@@ -80,42 +80,43 @@ sbi  PORTD, BUTTON_P      ;enable pull up if set, ie 1
           ldi         temp, LOW(TM_QTR)
           sts       OCR1AL , temp       ;Load TCNT1H:TCNT1L with initial count
        ;enable ovi interupt
-          ldi       r20, (1<<OCIE0A)
-          sts       TIMSK0, temp
+          ldi       temp, (1<<OCIE1A)
+          sts       TIMSK1, temp
 
 
 ;load current registers
 
-ldi  stateReg, ST_RED    ;start sequence in red
+ldi  currentstateReg , ST_RED    ;start sequence in red
 ldi  phaseReg, RED_QTR      ;set the timer for 5s
 clr walkFlagReg    ;no walk can be called yet
 clr  tickFlagReg    ;clr all timer/ tick
 
 sei
+rjmp main_loop
 
 main_loop:
 
 
 ;ceck if putton is low, pressed, set the ped flag
-sbis          PIND. BUTTON_P                    l if its set, skip the next instruction
-ldi          walkRequestReg ,1                     ; executes when pind is pulled low, 0
-dec           phaseReg
+sbis          PIND, BUTTON_P                    ;if its set, skip the next instruction
+ldi          walkFlagReg ,1                     ; executes when pind is pulled low, 0
+dec           phaseReg                            ;decrease countdowtjmer
 brne          main_loop
-Phase timer, timer left in this light, reached zero, branch based on current state, 
-  cpi stateReg, ST_RED
+;Phase timer, timer left in this light, reached zero, branch based on current state, 
+  cpi currentstateReg, ST_RED
   breq red_done
-  cpi stateReg, ST_GREEN
+  cpi currentstateReg, ST_GREEN
   breq green_done
-  cpi stateReg, ST_YELLOW
+  cpi currentstateReg, ST_YELLOW
   breq yellow_done
   rjmp walk_done                     ; otherwise we must be in walk
 
-red_done;
+red_done:
           tst          walkFlagReg                    ; was the ped requested
           breq to_green                    ;if not go to green
 ; if so enter walk phase
   clr walkFlagReg                    ; clear request
-  ldi stateReg, ST_WALK              ; update state
+  ldi currentstateReg, ST_WALK              ; update state
   ldi phaseReg, WALK_QTR             ; set walk time
   sbi PORTB, LED_RED                 ; keep red on 
   sbi PORTD, LED_WALK                ; turn on pedestrian led
@@ -124,43 +125,41 @@ red_done;
 
 ;switch light to green after red
 to_green:
-cbi PORTB, RED_LED                     ;turn off red led
-ldi stateReg, ST_GREEN                              ;set state to green 
+cbi PORTB, LED_RED                     ;turn off red led
+ldi currentstateReg, ST_GREEN                              ;set state to green 
 ldi phaseReg, GREEN_QTR         ;time for green
 sbi PORTB, LED_GRN                    ;turn on green led
 rjmp main_loop                              
  
 green_done:
 cbi PORTB, LED_GRN                    ;turn off green led
-ldi stateReg, ST_YELLOw                              ;set state to yellow
+sbi       PORTB, LED_YEL
+ldi currentstateReg, ST_YELLOW                              ;set state to yellow
 ldi phaseReg, YEL_QTR                    ;set time for yellow dureation
 rjmp main_loop
 
 yellow_done:
-cbi          PORTB, LED_YEL                    ;turn off yellow led
-ldi stateReg, ST_RED                    ; go back to red
+cbi        PORTB, LED_YEL                    ;turn off yellow led
+ldi currentstateReg, ST_RED                    ; go back to red
 ldi phaseReg, RED_QTR                    ;set duration for red 5s
 sbi PORTB, LED_RED
-rjmp main loop
+rjmp main_loop
 
 
 walk_done:
 cbi PORTB, LED_RED                    ;turn off red led
 cbi          PORTD, LED_WALK                    ;turn off led for ped
-ldi stateReg, ST_GREEN                              ;go to green state
-ldi phaseREg, GREEN_QTR                    ;set green duration
-sbu PORTB, LED_GRN                    ;turn on green led
+ldi currentstateReg, ST_GREEN                              ;go to green state
+ldi phaseReg, GREEN_QTR                    ;set green duration
+sbi PORTB, LED_GRN                    ;turn on green led
 
 
 
 ;so for the isr we will just set the timer flag 
 
 tm1_ISR:
-ldi temp , 1                              ;
-mov ?? im a little confused should we move the tickflag or 
+ldi tickFlagReg , 1                              ;
 reti
-
-
 
 
 
