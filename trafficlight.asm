@@ -41,10 +41,9 @@
 .org      0x0000
           rjmp    gpio_setup
 
-
           
 .org OC1Aaddr
-rjmp tm1_ISR  
+          rjmp tm1_ISR  
 .org INT_VECTORS_SIZE
 
 ;---------------------------------------------------
@@ -97,9 +96,17 @@ rjmp main_loop
 main_loop:
 
 
+wait_for_isr:
+tst tickFlagReg
+breq  wait_for_isr
+clr tickFlagReg
+
+
+
 ;ceck if putton is low, pressed, set the ped flag
 sbis          PIND, BUTTON_P                    ;if its set, skip the next instruction
 ldi          walkFlagReg ,1                     ; executes when pind is pulled low, 0
+
 dec           phaseReg                            ;decrease countdowtjmer
 brne          main_loop
 ;Phase timer, timer left in this light, reached zero, branch based on current state, 
@@ -125,40 +132,41 @@ red_done:
 
 ;switch light to green after red
 to_green:
-cbi PORTB, LED_RED                     ;turn off red led
 ldi currentstateReg, ST_GREEN                              ;set state to green 
 ldi phaseReg, GREEN_QTR         ;time for green
+cbi PORTB, LED_RED                     ;turn off red led
 sbi PORTB, LED_GRN                    ;turn on green led
 rjmp main_loop                              
  
 green_done:
-cbi PORTB, LED_GRN                    ;turn off green led
-sbi       PORTB, LED_YEL
 ldi currentstateReg, ST_YELLOW                              ;set state to yellow
-ldi phaseReg, YEL_QTR                    ;set time for yellow dureation
+ldi phaseReg, YEL_QTR
+cbi       PORTB, LED_GRN
+sbi       PORTB, LED_YEL
 rjmp main_loop
 
 yellow_done:
-cbi        PORTB, LED_YEL                    ;turn off yellow led
 ldi currentstateReg, ST_RED                    ; go back to red
 ldi phaseReg, RED_QTR                    ;set duration for red 5s
+cbi PORTB, LED_YEL
 sbi PORTB, LED_RED
 rjmp main_loop
 
 
 walk_done:
-cbi PORTB, LED_RED                    ;turn off red led
 cbi          PORTD, LED_WALK                    ;turn off led for ped
 ldi currentstateReg, ST_GREEN                              ;go to green state
 ldi phaseReg, GREEN_QTR                    ;set green duration
-sbi PORTB, LED_GRN                    ;turn on green led
-
+cbi PORTB, LED_RED                    ;turn off red led
+sbi PORTB,LED_GRN             ;turn on green           
+rjmp main_loop
 
 
 ;so for the isr we will just set the timer flag 
 
 tm1_ISR:
-ldi tickFlagReg , 1                              ;
+ldi       temp, 1
+mov tickFlagReg , temp                          ;
 reti
 
 
