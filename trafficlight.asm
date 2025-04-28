@@ -1,4 +1,17 @@
-;                                    CS12      CS11      CS10    
+;=========================================================================
+; Project: Simple AVR Traffic Light with Walk Button
+; Author:  Group 8: Adil Zaben
+;                   Jeremias Serrat
+;                   Liang Villarrubia Rio
+; Date:    2025-04-28
+;
+; Descr:   Controls a single traffic light (Red, Yellow, Green) with
+;          a pedestrian walk button. Uses Timer1 CTC mode for timing
+;          state durations. Checks button state by polling in the main loop.
+;=========================================================================
+
+; --- Timer Prescaler Definitions ---
+;                                    CS12      CS11      CS10
 .equ CLK_NO = (1<<CS10)                ;0        0         1
 .equ CLK_8 = (1<<CS11)                 ;0        1         0
 .equ CLK_64 = ((1<<CS11)|(1<<CS10))    ;0        1         1
@@ -12,21 +25,24 @@
 .equ YEL_QTR   = 8                   ; Yellow phase = 2 s
 .equ WALK_QTR  = 20                  ; Walk phase = 5 s
 
-;assign values using bitwise shit for the light states
+; --- State Value Definitions ---
+; Assign simple numerical values for the light states
 .equ ST_RED    = 1                   ; val for red
 .equ ST_GREEN  = 2                   ; val for green
 .equ ST_YELLOW = 3                   ; val for yellow
 .equ ST_WALK   = 4                   ; val for white/walk
 
-;assign gpio ports 
+; --- Pin Definitions ---
+; Assign gpio ports
 ; -----------------------------------------------------------------------------
-.equ LED_RED   = PORTB0              ;  pb0, 8, red led 
+.equ LED_RED   = PORTB0              ;  pb0, 8, red led
 .equ LED_YEL   = PORTB1              ; PB1, 9 on arduino   yellow  LED
 .equ LED_GRN   = PORTB2              ;  pb2, 10 on arduino green LED
 .equ LED_WALK  = PORTD7              ;  d7 on arduino traffic LED, not portb
 .equ BUTTON_P  = PIND2               ;  pind2, button input
 
-;global vars
+; --- Pin Definitions ---
+; Assign
 ; -----------------------------------------------------------------------------
 .def currentstateReg  = r18    ; current state of light val
 .def  phaseReg = r19    ;how many ticks left in curr state
@@ -42,15 +58,15 @@
           rjmp    gpio_setup
 
 
-          
+
 .org OC1Aaddr
-rjmp tm1_ISR  
+rjmp tm1_ISR
 .org INT_VECTORS_SIZE
 
 ;---------------------------------------------------
 gpio_setup:
 ;---------------------------------------------------
-;config the output for pb0-3 into temp using 
+;config the output for pb0-3 into temp using
 ;bitshift wise operator
 ldi  temp, (1<<LED_RED) | (1<<LED_YEL) | (1<<LED_GRN)
 out  DDRB, temp    ;set bits ready for outputs
@@ -66,14 +82,14 @@ cbi DDRD, BUTTON_P      ;button in, if 0
 sbi  PORTD, BUTTON_P      ;enable pull up if set, ie 1
 
 ;---------------------------------------------------
-;ctc mode 
+;ctc mode
 ;
 ;Load TCCR1A & TCCR1B
           clr       temp
-          sts       TCCR1A, temp   
+          sts       TCCR1A, temp
           ldi       temp, (1<<WGM12) | CLK_256     ;actual ctc model, set when equal to 1, waveform gen
           sts       TCCR1B, temp
- 
+
 ;Load OCR1AH:OCR1AL with stop count
           ldi       temp, HIGH(TM_QTR)              ;load OCR1AH value in
           sts         OCR1AH, temp                   ;CTC mode
@@ -102,7 +118,7 @@ sbis          PIND, BUTTON_P                    ;if its set, skip the next instr
 ldi          walkFlagReg ,1                     ; executes when pind is pulled low, 0
 dec           phaseReg                            ;decrease countdowtjmer
 brne          main_loop
-;Phase timer, timer left in this light, reached zero, branch based on current state, 
+;Phase timer, timer left in this light, reached zero, branch based on current state,
   cpi currentstateReg, ST_RED
   breq red_done
   cpi currentstateReg, ST_GREEN
@@ -118,19 +134,19 @@ red_done:
   clr walkFlagReg                    ; clear request
   ldi currentstateReg, ST_WALK              ; update state
   ldi phaseReg, WALK_QTR             ; set walk time
-  sbi PORTB, LED_RED                 ; keep red on 
+  sbi PORTB, LED_RED                 ; keep red on
   sbi PORTD, LED_WALK                ; turn on pedestrian led
-  rjmp main_loop                     ; back to main 
+  rjmp main_loop                     ; back to main
 
 
 ;switch light to green after red
 to_green:
 cbi PORTB, LED_RED                     ;turn off red led
-ldi currentstateReg, ST_GREEN                              ;set state to green 
+ldi currentstateReg, ST_GREEN                              ;set state to green
 ldi phaseReg, GREEN_QTR         ;time for green
 sbi PORTB, LED_GRN                    ;turn on green led
-rjmp main_loop                              
- 
+rjmp main_loop
+
 green_done:
 cbi PORTB, LED_GRN                    ;turn off green led
 sbi       PORTB, LED_YEL
@@ -155,15 +171,8 @@ sbi PORTB, LED_GRN                    ;turn on green led
 
 
 
-;so for the isr we will just set the timer flag 
+;so for the isr we will just set the timer flag
 
 tm1_ISR:
 ldi tickFlagReg , 1                              ;
 reti
-
-
-
-
-
-
-
