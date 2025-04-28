@@ -14,19 +14,19 @@
 
 
 ; --- Constants: Timing (in seconds) ---
-.equ GREEN_TIME_S  = 5                  ; Duration for Green light (seconds)
-.equ YELLOW_TIME_S = 2                  ; Duration for Yellow light (seconds)
-.equ ALL_RED_TIME_S= 1                  ; Duration for All-Red transition phase
-.equ WALK_TIME_S   = 6                  ; Total duration for Walk light (seconds)
-.equ POST_WALK_S   = 1                  ; Short Red duration after walk light off before next phase
+.equ GREEN_TIME_S  = 5                         ; Duration for Green light (seconds)
+.equ YELLOW_TIME_S = 2                         ; Duration for Yellow light (seconds)
+.equ ALL_RED_TIME_S= 1                         ; Duration for All-Red transition phase
+.equ WALK_TIME_S   = 6                         ; Total duration for Walk light (seconds)
+.equ POST_WALK_S   = 1                         ; Short Red duration after walk light off before next phase
 
 ; --- Constants: Blinking Walk Timing ---
-.equ BLINK_TIME_S  = 3                  ; Duration for blinking part (Must be <= WALK_TIME_S / 2)
-.equ WALK_SOLID_S  = WALK_TIME_S - BLINK_TIME_S ; Duration for solid part
+.equ BLINK_TIME_S  = 3                         ; Duration for blinking part (Must be <= WALK_TIME_S / 2)
+.equ WALK_SOLID_S  = WALK_TIME_S - BLINK_TIME_S; Duration for solid part
 
 ; --- Constants: Timer Configuration (Timer1 CTC Mode, Prescaler 256) ---
 .equ T1_PRESCALER = (1<<CS12)|(0<<CS11)|(0<<CS10) ; clk/256
-.equ T1_OCR1A_VAL      = 15624 ; Target count for ~0.25 sec interrupt (16M/256 * 0.25 - 1)
+.equ T1_OCR1A_VAL      = 15624                 ; Target count for ~0.25 sec interrupt
 .equ TICKS_PER_SECOND  = 4                     ; Number of timer interrupts per second
 
 ; --- Constants: Calculate Ticks from Seconds ---
@@ -38,56 +38,56 @@
 .equ POST_WALK_TICKS = POST_WALK_S * TICKS_PER_SECOND
 
 ; --- Constants: State Definitions ---
-.equ STATE_MAIN_GREEN      = 0                 ; Main Green, Cross Red
-.equ STATE_MAIN_YELLOW     = 1                 ; Main Yellow, Cross Red
-.equ STATE_ALL_RED_1       = 2                 ; All Red after Main Yellow
-.equ STATE_CROSS_GREEN     = 3                 ; Main Red, Cross Green
-.equ STATE_CROSS_YELLOW    = 4                 ; Main Red, Cross Yellow
-.equ STATE_ALL_RED_2       = 5                 ; All Red after Cross Yellow
+.equ STATE_MAIN_GREEN      = 0                 ; State: Main lane has Green, Crossing lane has Red
+.equ STATE_MAIN_YELLOW     = 1                 ; State: Main lane has Yellow, Crossing lane has Red
+.equ STATE_ALL_RED_1       = 2                 ; State: Both lanes have Red (after Main Yellow)
+.equ STATE_CROSS_GREEN     = 3                 ; State: Main lane has Red, Crossing lane has Green
+.equ STATE_CROSS_YELLOW    = 4                 ; State: Main lane has Red, Crossing lane has Yellow
+.equ STATE_ALL_RED_2       = 5                 ; State: Both lanes have Red (after Crossing Yellow)
 ; Main Crosswalk States
-.equ STATE_MAIN_XW_SOLID   = 6
-.equ STATE_MAIN_XW_BLINK   = 7
-.equ STATE_MAIN_XW_END     = 8
+.equ STATE_MAIN_XW_SOLID   = 6                 ; State: Both Red, Main Walk light is solid ON
+.equ STATE_MAIN_XW_BLINK   = 7                 ; State: Both Red, Main Walk light is blinking
+.equ STATE_MAIN_XW_END     = 8                 ; State: Both Red, Main Walk light is OFF (post-walk delay)
 ; Crossing Crosswalk States
-.equ STATE_CROSS_XW_SOLID  = 9
-.equ STATE_CROSS_XW_BLINK  = 10
-.equ STATE_CROSS_XW_END    = 11
+.equ STATE_CROSS_XW_SOLID  = 9                 ; State: Both Red, Crossing Walk light is solid ON
+.equ STATE_CROSS_XW_BLINK  = 10                ; State: Both Red, Crossing Walk light is blinking
+.equ STATE_CROSS_XW_END    = 11                ; State: Both Red, Crossing Walk light is OFF (post-walk delay)
 
 ; --- Constants: Pin Definitions ---
 ; Port B: Main Traffic Light LEDs (Lane 1)
-.equ LED1_PORT     = PORTB
-.equ LED1_DDR      = DDRB
-.equ RED1_PIN      = PB3
-.equ YELLOW1_PIN   = PB2
-.equ GREEN1_PIN    = PB1
-.equ WALK1_PIN     = PB0
+.equ LED1_PORT     = PORTB                     ; I/O Register: Port B Data Register (for Main LEDs)
+.equ LED1_DDR      = DDRB                      ; I/O Register: Port B Data Direction Register
+.equ RED1_PIN      = PB3                       ; Pin Assignment: Main Red LED connected to Port B, bit 3
+.equ YELLOW1_PIN   = PB2                       ; Pin Assignment: Main Yellow LED connected to Port B, bit 2
+.equ GREEN1_PIN    = PB1                       ; Pin Assignment: Main Green LED connected to Port B, bit 1
+.equ WALK1_PIN     = PB0                       ; Pin Assignment: Main Walk LED connected to Port B, bit 0
 ; Port D: Crossing Traffic Light LEDs (Lane 2) & Buttons
 ; *** LEDs moved to PD4-PD7 to avoid conflict with Buttons on PD2/PD3 ***
-.equ LED2_PORT     = PORTD                  ; <- MODIFIED
-.equ LED2_DDR      = DDRD                   ; <- MODIFIED
-.equ RED2_PIN      = PD7                    ; <- MODIFIED
-.equ YELLOW2_PIN   = PD6                    ; <- MODIFIED
-.equ GREEN2_PIN    = PD5                    ; <- MODIFIED
-.equ WALK2_PIN     = PD4                    ; <- MODIFIED
+.equ LED2_PORT     = PORTD                     ; I/O Register: Port D Data Register (for Crossing LEDs & Buttons)
+.equ LED2_DDR      = DDRD                      ; I/O Register: Port D Data Direction Register
+.equ RED2_PIN      = PD7                       ; Pin Assignment: Crossing Red LED connected to Port D, bit 7
+.equ YELLOW2_PIN   = PD6                       ; Pin Assignment: Crossing Yellow LED connected to Port D, bit 6
+.equ GREEN2_PIN    = PD5                       ; Pin Assignment: Crossing Green LED connected to Port D, bit 5
+.equ WALK2_PIN     = PD4                       ; Pin Assignment: Crossing Walk LED connected to Port D, bit 4
 ; Buttons on PORTD
-.equ BUTTON_PORT   = PORTD
-.equ BUTTON_PINREG = PIND
-.equ BUTTON_DDR    = DDRD
-.equ BUTTON1_PIN   = PD2                    ; INT0 pin (Remains PD2)
-.equ BUTTON2_PIN   = PD3                    ; INT1 pin (Remains PD3)
+.equ BUTTON_PORT   = PORTD                     ; I/O Register: Port D Data Register (used for Button pull-ups)
+.equ BUTTON_PINREG = PIND                      ; I/O Register: Port D Input Pins Address (for reading button state)
+.equ BUTTON_DDR    = DDRD                      ; I/O Register: Port D Data Direction Register
+.equ BUTTON1_PIN   = PD2                       ; Pin Assignment: Main Button (Crosswalk 1) connected to Port D, bit 2 (INT0)
+.equ BUTTON2_PIN   = PD3                       ; Pin Assignment: Crossing Button (Crosswalk 2) connected to Port D, bit 3 (INT1)
 
 ; --- Register Definitions (.def) ---
-.def temp          = r16
-.def tick_counter  = r17
-.def flags         = r18 ; REGISTER r18
-.def state_reg     = r19 ; REGISTER r19
+.def temp          = r16                       ; Register Alias: r16 used as a general-purpose temporary register
+.def tick_counter  = r17                       ; Register Alias: r17 used to count down timer ticks for state duration
+.def flags         = r18                       ; Register Alias: r18 used to store various status flags (bit-field)
+.def state_reg     = r19                       ; Register Alias: r19 used to store the current state number
 
 ; --- Bit definitions for 'flags' register (r18) ---
-.equ FLAG_CROSSWALK_REQ1  = 0
-.equ FLAG_CROSSWALK_REQ2  = 1
-.equ FLAG_BLINK_STATE     = 2
-.equ FLAG_DEBOUNCE1_BUSY  = 3
-.equ FLAG_DEBOUNCE2_BUSY  = 4
+.equ FLAG_CROSSWALK_REQ1  = 0                  ; Bit 0: Set when Main crosswalk button is pressed
+.equ FLAG_CROSSWALK_REQ2  = 1                  ; Bit 1: Set when Crossing crosswalk button is pressed
+.equ FLAG_BLINK_STATE     = 2                  ; Bit 2: Toggles ON/OFF during walk light blinking phase
+.equ FLAG_DEBOUNCE1_BUSY  = 3                  ; Bit 3: Set while Button 1 is being debounced
+.equ FLAG_DEBOUNCE2_BUSY  = 4                  ; Bit 4: Set while Button 2 is being debounced
 
 ;=========================================================================
 ; Vector Table
