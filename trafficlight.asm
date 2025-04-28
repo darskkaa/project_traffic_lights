@@ -109,12 +109,6 @@
 ; Main Program
 ;=========================================================================
 RESET:
-; Initialize Stack Pointer
-    ldi   temp, low(RAMEND)
-    out   SPL, temp
-    ldi   temp, high(RAMEND)
-    out   SPH, temp
-
 ; Clear state variables/flags registers
     clr   state_reg
     clr   tick_counter
@@ -161,7 +155,7 @@ io_init:
 ; (Leave PD0-PD3 as inputs for now, will be set below)
     ldi   temp, (1<<RED2_PIN)|(1<<YELLOW2_PIN)|(1<<GREEN2_PIN)|(1<<WALK2_PIN)
     out   LED2_DDR, temp                  ; Write LED output bits to DDRD (overwrites previous DDRD state)
-                                          ;
+                                          
 
 ; Enable Pull-ups for BUTTON1_PIN(PD2), BUTTON2_PIN(PD3)
 ; Set initial state for Crossing LEDs (All Off)
@@ -217,20 +211,25 @@ TIMER1_COMPA_ISR:
 ; --- Debounce Logic ---
     sbrc  flags, FLAG_DEBOUNCE1_BUSY
     rcall handle_debounce1
+    
     sbrc  flags, FLAG_DEBOUNCE2_BUSY
     rcall handle_debounce2
 
 ; --- Blinking Logic ---
     mov   r24, state_reg ; Copy state (r19) to r24 for compare
+   
     cpi   r24, STATE_MAIN_XW_BLINK
     breq  toggle_blink
+    
     cpi   r24, STATE_CROSS_XW_BLINK
     breq  toggle_blink
+    
     rjmp  timer_decr_state              ; Not a blink state
 
 toggle_blink:
     ldi   r24, (1<<FLAG_BLINK_STATE)    ; Mask in r24
     eor   flags, r24                    ; eor r18, r24
+    
     rcall update_lights                 ; Update LEDs immediately
 ; Fall through to timer_decr_state
 
@@ -364,97 +363,140 @@ update_state:
 ; Modifies: state_reg (r19), tick_counter (r17), flags (r18)
 ; Clobbers: temp (r16)
 ;-------------------------------------------------------------------------
-    cpi   state_reg, STATE_MAIN_GREEN
-    breq  next_state_MG
-    cpi   state_reg, STATE_MAIN_YELLOW
-    breq  next_state_MY
-    cpi   state_reg, STATE_ALL_RED_1
-    breq  next_state_AR1
-    cpi   state_reg, STATE_CROSS_GREEN
-    breq  next_state_CG
-    cpi   state_reg, STATE_CROSS_YELLOW
-    breq  next_state_CY
-    cpi   state_reg, STATE_ALL_RED_2
-    breq  next_state_AR2
-    cpi   state_reg, STATE_MAIN_XW_SOLID
-    breq  next_state_MXS
-    cpi   state_reg, STATE_MAIN_XW_BLINK
-    breq  next_state_MXB
-    cpi   state_reg, STATE_MAIN_XW_END
-    breq  next_state_MXE
-    cpi   state_reg, STATE_CROSS_XW_SOLID
-    breq  next_state_CXS
-    cpi   state_reg, STATE_CROSS_XW_BLINK
-    breq  next_state_CXB
-    cpi   state_reg, STATE_CROSS_XW_END
-    breq  next_state_CXE
-    rjmp  next_state_AR2      ; Default/Error case
+    ; Equivalent to: switch (state_reg) {
 
-next_state_MG:
-    ldi   state_reg, STATE_MAIN_YELLOW
-    ldi   tick_counter, YELLOW_TICKS
+    cpi   state_reg, STATE_MAIN_GREEN      ; case STATE_MAIN_GREEN:
+    breq  next_state_MG                    ;   goto next_state_MG; break;
+
+    cpi   state_reg, STATE_MAIN_YELLOW     ; case STATE_MAIN_YELLOW:
+    breq  next_state_MY                    ;   goto next_state_MY; break;
+
+    cpi   state_reg, STATE_ALL_RED_1       ; case STATE_ALL_RED_1:
+    breq  next_state_AR1                   ;   goto next_state_AR1; break;
+
+    cpi   state_reg, STATE_CROSS_GREEN     ; case STATE_CROSS_GREEN:
+    breq  next_state_CG                    ;   goto next_state_CG; break;
+
+    cpi   state_reg, STATE_CROSS_YELLOW    ; case STATE_CROSS_YELLOW:
+    breq  next_state_CY                    ;   goto next_state_CY; break;
+
+    cpi   state_reg, STATE_ALL_RED_2       ; case STATE_ALL_RED_2:
+    breq  next_state_AR2                   ;   goto next_state_AR2; break;
+
+    ; Main Crosswalk States
+    cpi   state_reg, STATE_MAIN_XW_SOLID   ; case STATE_MAIN_XW_SOLID:
+    breq  next_state_MXS                   ;   goto next_state_MXS; break;
+
+    cpi   state_reg, STATE_MAIN_XW_BLINK   ; case STATE_MAIN_XW_BLINK:
+    breq  next_state_MXB                   ;   goto next_state_MXB; break;
+
+    cpi   state_reg, STATE_MAIN_XW_END     ; case STATE_MAIN_XW_END:
+    breq  next_state_MXE                   ;   goto next_state_MXE; break;
+
+    ; Crossing Crosswalk States
+    cpi   state_reg, STATE_CROSS_XW_SOLID  ; case STATE_CROSS_XW_SOLID:
+    breq  next_state_CXS                   ;   goto next_state_CXS; break;
+
+    cpi   state_reg, STATE_CROSS_XW_BLINK  ; case STATE_CROSS_XW_BLINK:
+    breq  next_state_CXB                   ;   goto next_state_CXB; break;
+
+    cpi   state_reg, STATE_CROSS_XW_END    ; case STATE_CROSS_XW_END:
+    breq  next_state_CXE                   ;   goto next_state_CXE; break;
+
+    rjmp  next_state_AR2                   ; default: // Or error case
+                                           ;   goto next_state_AR2;
+                                           ; } // End of switch
+
+next_state_MG: ; Transition FROM Main Green
+    ldi   state_reg, STATE_MAIN_YELLOW     ; Set next state to Main Yellow
+    ldi   tick_counter, YELLOW_TICKS       ; Load duration for Yellow light
+    ret                                    ; Return (back to Timer ISR)
+
+next_state_MY: ; Transition FROM Main Yellow
+    ldi   state_reg, STATE_ALL_RED_1       ; Set next state to All Red (phase 1, after Main Yellow)
+    ldi   tick_counter, ALL_RED_TICKS      ; Load duration for All Red
     ret
-next_state_MY:
-    ldi   state_reg, STATE_ALL_RED_1
-    ldi   tick_counter, ALL_RED_TICKS
+
+next_state_AR1: ; Transition FROM All Red (phase 1 - after Main Yellow)
+    ; Check if the Crossing Lane needs service before giving it Green
+    sbrc  flags, FLAG_CROSSWALK_REQ2       ; Check if Crossing Lane button was pressed (Skip next if clear)
+    rjmp  start_cross_xw                   ; If pressed, jump to start Crossing crosswalk sequence
+    ; If Crossing button was NOT pressed:
+    ldi   state_reg, STATE_CROSS_GREEN     ; Set next state to Crossing Green
+    ldi   tick_counter, GREEN_TICKS        ; Load duration for Green light
     ret
-next_state_AR1:
-    sbrc  flags, FLAG_CROSSWALK_REQ2
-    rjmp  start_cross_xw
-    ldi   state_reg, STATE_CROSS_GREEN
-    ldi   tick_counter, GREEN_TICKS
+
+next_state_CG: ; Transition FROM Crossing Green
+    ldi   state_reg, STATE_CROSS_YELLOW    ; Set next state to Crossing Yellow
+    ldi   tick_counter, YELLOW_TICKS       ; Load duration for Yellow light
     ret
-next_state_CG:
-    ldi   state_reg, STATE_CROSS_YELLOW
-    ldi   tick_counter, YELLOW_TICKS
+
+next_state_CY: ; Transition FROM Crossing Yellow
+    ldi   state_reg, STATE_ALL_RED_2       ; Set next state to All Red (phase 2, after Crossing Yellow)
+    ldi   tick_counter, ALL_RED_TICKS      ; Load duration for All Red
     ret
-next_state_CY:
-    ldi   state_reg, STATE_ALL_RED_2
-    ldi   tick_counter, ALL_RED_TICKS
+
+next_state_AR2: ; Transition FROM All Red (phase 2 - after Crossing Yellow)
+    ; Check if the Main Lane needs service before giving it Green
+    sbrc  flags, FLAG_CROSSWALK_REQ1       ; Check if Main Lane button was pressed (Skip next if clear)
+    rjmp  start_main_xw                    ; If pressed, jump to start Main crosswalk sequence
+    ; If Main button was NOT pressed:
+    ldi   state_reg, STATE_MAIN_GREEN      ; Set next state to Main Green
+    ldi   tick_counter, GREEN_TICKS        ; Load duration for Green light
     ret
-next_state_AR2:
-    sbrc  flags, FLAG_CROSSWALK_REQ1
-    rjmp  start_main_xw
-    ldi   state_reg, STATE_MAIN_GREEN
-    ldi   tick_counter, GREEN_TICKS
+
+start_main_xw: ; Entered FROM All Red phase 2 (AR2) if Main button was pressed
+    ; Service the Main crosswalk request
+    ldi   temp, (1<<FLAG_CROSSWALK_REQ1)   ; Prepare mask for Req1 bit
+    com   temp                             ; Invert mask (to 1111_1110)
+    and   flags, temp                      ; Clear Req1 flag in flags register (r18), acknowledging service
+    ldi   state_reg, STATE_MAIN_XW_SOLID   ; Set next state to Main Walk Solid
+    ldi   tick_counter, WALK_SOLID_TICKS   ; Load duration for solid walk phase
     ret
-start_main_xw:
-    ldi   temp, (1<<FLAG_CROSSWALK_REQ1) ; Clear Req1 flag
-    com   temp
-    and   flags, temp
-    ldi   state_reg, STATE_MAIN_XW_SOLID
-    ldi   tick_counter, WALK_SOLID_TICKS
+
+start_cross_xw: ; Entered FROM All Red phase 1 (AR1) if Crossing button was pressed
+    ; Service the Crossing crosswalk request
+    ldi   temp, (1<<FLAG_CROSSWALK_REQ2)   ; Prepare mask for Req2 bit
+    com   temp                             ; Invert mask (to 1111_1101)
+    and   flags, temp                      ; Clear Req2 flag in flags register (r18), acknowledging service
+    ldi   state_reg, STATE_CROSS_XW_SOLID  ; Set next state to Crossing Walk Solid
+    ldi   tick_counter, WALK_SOLID_TICKS   ; Load duration for solid walk phase
     ret
-start_cross_xw:
-    ldi   temp, (1<<FLAG_CROSSWALK_REQ2) ; Clear Req2 flag
-    com   temp
-    and   flags, temp
-    ldi   state_reg, STATE_CROSS_XW_SOLID
-    ldi   tick_counter, WALK_SOLID_TICKS
+
+next_state_MXS: ; Transition FROM Main Walk Solid
+    ; First part of walk cycle done, move to blinking part
+    ldi   state_reg, STATE_MAIN_XW_BLINK   ; Set next state to Main Walk Blinking
+    ldi   tick_counter, BLINK_TICKS        ; Load duration for blinking phase
     ret
-next_state_MXS:
-    ldi   state_reg, STATE_MAIN_XW_BLINK
-    ldi   tick_counter, BLINK_TICKS
+
+next_state_MXB: ; Transition FROM Main Walk Blinking
+    ; Blinking part done, move to short "all red" delay after walk
+    ldi   state_reg, STATE_MAIN_XW_END     ; Set next state to Main Walk End (post-walk delay)
+    ldi   tick_counter, POST_WALK_TICKS    ; Load duration for post-walk delay
     ret
-next_state_MXB:
-    ldi   state_reg, STATE_MAIN_XW_END
-    ldi   tick_counter, POST_WALK_TICKS
+
+next_state_MXE: ; Transition FROM Main Walk End (post-walk delay)
+    ; Finished Main crosswalk sequence, go to All Red before potentially giving Crossing Green
+    ldi   state_reg, STATE_ALL_RED_1       ; Set next state back to All Red (phase 1)
+    ldi   tick_counter, ALL_RED_TICKS      ; Load duration for All Red
     ret
-next_state_MXE:
-    ldi   state_reg, STATE_ALL_RED_1
-    ldi   tick_counter, ALL_RED_TICKS
+
+next_state_CXS: ; Transition FROM Crossing Walk Solid
+    ; First part of walk cycle done, move to blinking part
+    ldi   state_reg, STATE_CROSS_XW_BLINK  ; Set next state to Crossing Walk Blinking
+    ldi   tick_counter, BLINK_TICKS        ; Load duration for blinking phase
     ret
-next_state_CXS:
-    ldi   state_reg, STATE_CROSS_XW_BLINK
-    ldi   tick_counter, BLINK_TICKS
+
+next_state_CXB: ; Transition FROM Crossing Walk Blinking
+    ; Blinking part done, move to short "all red" delay after walk
+    ldi   state_reg, STATE_CROSS_XW_END    ; Set next state to Crossing Walk End (post-walk delay)
+    ldi   tick_counter, POST_WALK_TICKS    ; Load duration for post-walk delay
     ret
-next_state_CXB:
-    ldi   state_reg, STATE_CROSS_XW_END
-    ldi   tick_counter, POST_WALK_TICKS
-    ret
-next_state_CXE:
-    ldi   state_reg, STATE_ALL_RED_2
-    ldi   tick_counter, ALL_RED_TICKS
+
+next_state_CXE: ; Transition FROM Crossing Walk End (post-walk delay)
+    ; Finished Crossing crosswalk sequence, go to All Red before potentially giving Main Green
+    ldi   state_reg, STATE_ALL_RED_2       ; Set next state back to All Red (phase 2)
+    ldi   tick_counter, ALL_RED_TICKS      ; Load duration for All Red
     ret
 ;-------------------------------------------------------------------------
 
@@ -465,76 +507,114 @@ update_lights:
 ; Modifies: LED1_PORT (PORTB), LED2_PORT (PORTD)
 ; Clobbers: r20, r21
 ;-------------------------------------------------------------------------
-    push  r20                           ; Save registers used locally
-    push  r21                           
-    clr   r20                           ; r20 = pattern for PORTB (Main)
-    clr   r21                           ; r21 = pattern for PORTD (Crossing)
+    push  r20                               ; Save registers used locally
+    push  r21                               
+    clr   r20                               ; r20 = pattern for PORTB (Main)
+    clr   r21                               ; r21 = pattern for PORTD (Crossing)
 
-    cpi   state_reg, STATE_MAIN_GREEN
-    breq  set_MG_lights
-    cpi   state_reg, STATE_MAIN_YELLOW
-    breq  set_MY_lights
-    cpi   state_reg, STATE_ALL_RED_1
-    breq  set_AR_lights
-    cpi   state_reg, STATE_CROSS_GREEN
-    breq  set_CG_lights
-    cpi   state_reg, STATE_CROSS_YELLOW
-    breq  set_CY_lights
-    cpi   state_reg, STATE_ALL_RED_2
-    breq  set_AR_lights
-    cpi   state_reg, STATE_MAIN_XW_SOLID
-    breq  set_MXS_lights
-    cpi   state_reg, STATE_MAIN_XW_BLINK
-    breq  set_MXB_lights
-    cpi   state_reg, STATE_MAIN_XW_END
-    breq  set_AR_lights
-    cpi   state_reg, STATE_CROSS_XW_SOLID
-    breq  set_CXS_lights
-    cpi   state_reg, STATE_CROSS_XW_BLINK
-    breq  set_CXB_lights
-    cpi   state_reg, STATE_CROSS_XW_END
-    breq  set_AR_lights
-    rjmp  write_patterns                        ; Default
+    ; Equivalent to: switch (state_reg) {
+
+    cpi   state_reg, STATE_MAIN_GREEN       ; case STATE_MAIN_GREEN:
+    breq  set_MG_lights                     ;   goto set_MG_lights; break;
+
+    cpi   state_reg, STATE_MAIN_YELLOW      ; case STATE_MAIN_YELLOW:
+    breq  set_MY_lights                     ;   goto set_MY_lights; break;
+
+    cpi   state_reg, STATE_ALL_RED_1        ; case STATE_ALL_RED_1:
+    breq  set_AR_lights                     ;   goto set_AR_lights; break; // Fallthrough handled by multiple cases jumping here
+
+    cpi   state_reg, STATE_CROSS_GREEN      ; case STATE_CROSS_GREEN:
+    breq  set_CG_lights                     ;   goto set_CG_lights; break;
+
+    cpi   state_reg, STATE_CROSS_YELLOW     ; case STATE_CROSS_YELLOW:
+    breq  set_CY_lights                     ;   goto set_CY_lights; break;
+
+    cpi   state_reg, STATE_ALL_RED_2        ; case STATE_ALL_RED_2:
+    breq  set_AR_lights                     ;   goto set_AR_lights; break; // Fallthrough
+
+    ; Main Crosswalk States
+    cpi   state_reg, STATE_MAIN_XW_SOLID    ; case STATE_MAIN_XW_SOLID:
+    breq  set_MXS_lights                    ;   goto set_MXS_lights; break;
+
+    cpi   state_reg, STATE_MAIN_XW_BLINK    ; case STATE_MAIN_XW_BLINK:
+    breq  set_MXB_lights                    ;   goto set_MXB_lights; break;
+
+    cpi   state_reg, STATE_MAIN_XW_END      ; case STATE_MAIN_XW_END:
+    breq  set_AR_lights                     ;   goto set_AR_lights; break; // Fallthrough
+
+    ; Crossing Crosswalk States
+    cpi   state_reg, STATE_CROSS_XW_SOLID   ; case STATE_CROSS_XW_SOLID:
+    breq  set_CXS_lights                    ;   goto set_CXS_lights; break;
+
+    cpi   state_reg, STATE_CROSS_XW_BLINK   ; case STATE_CROSS_XW_BLINK:
+    breq  set_CXB_lights                    ;   goto set_CXB_lights; break;
+
+    cpi   state_reg, STATE_CROSS_XW_END     ; case STATE_CROSS_XW_END:
+    breq  set_AR_lights                     ;   goto set_AR_lights; break; // Fallthrough
+
+    rjmp  write_patterns                    ; default: // Or error case
+                                            ;   goto write_patterns;
+                                            ; } // End of switch
+
 
 set_MG_lights: ; Main Green (PORTB), Cross Red (PORTD)
     sbr   r20, (1<<GREEN1_PIN)                  ; Set GREEN1 bit in r20
     sbr   r21, (1<<RED2_PIN)                    ; Set RED2 bit (PD4) in r21
+    
     rjmp  write_patterns
+
 set_MY_lights: ; Main Yellow (PORTB), Cross Red (PORTD)
     sbr   r20, (1<<YELLOW1_PIN)                 ; Set YELLOW1 bit in r20
     sbr   r21, (1<<RED2_PIN)                    ; Set RED2 bit (PD4) in r21
+    
     rjmp  write_patterns
+
 set_AR_lights: ; All Red (PORTB & PORTD)
     sbr   r20, (1<<RED1_PIN)                    ; Set RED1 bit in r20
     sbr   r21, (1<<RED2_PIN)                    ; Set RED2 bit (PD4) in r21
+
     rjmp  write_patterns
+
 set_CG_lights: ; Main Red (PORTB), Cross Green (PORTD)
     sbr   r20, (1<<RED1_PIN)                    ; Set RED1 bit in r20
     sbr   r21, (1<<GREEN2_PIN)                  ; Set GREEN2 bit (PD6) in r21
+
     rjmp  write_patterns
+
 set_CY_lights: ; Main Red (PORTB), Cross Yellow (PORTD)
     sbr   r20, (1<<RED1_PIN)                    ; Set RED1 bit in r20
     sbr   r21, (1<<YELLOW2_PIN)                 ; Set YELLOW2 bit (PD5) in r21
+
     rjmp  write_patterns
+
 set_MXS_lights: ; All Red, Main Walk Solid ON (PORTB)
     sbr   r20, (1<<RED1_PIN)|(1<<WALK1_PIN)     ; Set RED1, WALK1 bits in r20
     sbr   r21, (1<<RED2_PIN)                    ; Set RED2 bit (PD4) in r21
+
     rjmp  write_patterns
+
 set_MXB_lights: ; All Red, Main Walk Blinking (PORTB)
     sbr   r20, (1<<RED1_PIN)                    ; Set RED1 bit in r20
     sbr   r21, (1<<RED2_PIN)                    ; Set RED2 bit (PD4) in r21
+
     sbrc  flags, FLAG_BLINK_STATE               ; Check blink flag in r18
     sbr   r20, (1<<WALK1_PIN)                   ; Set WALK1 bit in r20 if flag is 1
+
     rjmp  write_patterns
+
 set_CXS_lights: ; All Red, Cross Walk Solid ON (PORTD)
     sbr   r20, (1<<RED1_PIN)                    ; Set RED1 bit in r20
     sbr   r21, (1<<RED2_PIN)|(1<<WALK2_PIN)     ; Set RED2(PD4), WALK2(PD7) bits in r21
+
     rjmp  write_patterns
+
 set_CXB_lights: ; All Red, Cross Walk Blinking (PORTD)
     sbr   r20, (1<<RED1_PIN)                    ; Set RED1 bit in r20
     sbr   r21, (1<<RED2_PIN)                    ; Set RED2 bit (PD4) in r21
+
     sbrc  flags, FLAG_BLINK_STATE               ; Check blink flag in r18
     sbr   r21, (1<<WALK2_PIN)                   ; Set WALK2 bit (PD7) in r21 if flag is 1
+
     rjmp  write_patterns
 
 write_patterns:
