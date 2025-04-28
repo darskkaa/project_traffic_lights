@@ -1,169 +1,562 @@
-;                                    CS12      CS11      CS10    
-.equ CLK_NO = (1<<CS10)                ;0        0         1
-.equ CLK_8 = (1<<CS11)                 ;0        1         0
-.equ CLK_64 = ((1<<CS11)|(1<<CS10))    ;0        1         1
-.equ CLK_256 =(1<<CS12)                ;1        0         0
-.equ CLK_1024 = ((1<<CS12)|(1<<CS10))  ;1        0         1
+;=========================================================================
+; Project: AVR Traffic Light System with Crossing Lane & Blinking Walk
+; Author:  Group 8: Adil Zaben
+;                   Jeremias Serrat
+;                   Liang Villarrubia Rio              
+; Date:    2025-04-27 ;
+; Descr:   Controls two perpendicular traffic lights (Main & Crossing)
+;          with independent crosswalk buttons on INT0/INT1.
+;          Main LEDs on PORTB, Crossing LEDs on PORTD (PD4-PD7).
+;          Implements R-Y-G sequence with All-Red phases.
+;          Pedestrian walk lights blink for the second half.
+;          Uses Timer1 CTC interrupt with Prescaler 256.
+;=========================================================================
 
 
-.equ TM_QTR    = 15624               ; Timer1 ctc val for 0.25 s
-.equ RED_QTR   = 20                  ; Red phase, 20×0.25 s = 5 s delay
-.equ GREEN_QTR = 20                  ; Green phase, same as red
-.equ YEL_QTR   = 8                   ; Yellow phase = 2 s
-.equ WALK_QTR  = 20                  ; Walk phase = 5 s
+; --- Constants: Timing (in seconds) ---
+.equ GREEN_TIME_S  = 5                  ; Duration for Green light (seconds)
+.equ YELLOW_TIME_S = 2                  ; Duration for Yellow light (seconds)
+.equ ALL_RED_TIME_S= 1                  ; Duration for All-Red transition phase
+.equ WALK_TIME_S   = 6                  ; Total duration for Walk light (seconds)
+.equ POST_WALK_S   = 1                  ; Short Red duration after walk light off before next phase
 
-;assign values using bitwise shit for the light states
-.equ ST_RED    = 1                   ; val for red
-.equ ST_GREEN  = 2                   ; val for green
-.equ ST_YELLOW = 3                   ; val for yellow
-.equ ST_WALK   = 4                   ; val for white/walk
+; --- Constants: Blinking Walk Timing ---
+.equ BLINK_TIME_S  = 3                  ; Duration for blinking part (Must be <= WALK_TIME_S / 2)
+.equ WALK_SOLID_S  = WALK_TIME_S - BLINK_TIME_S ; Duration for solid part
 
-;assign gpio ports 
-; -----------------------------------------------------------------------------
-.equ LED_RED   = PORTB0              ;  pb0, 8, red led 
-.equ LED_YEL   = PORTB1              ; PB1, 9 on arduino   yellow  LED
-.equ LED_GRN   = PORTB2              ;  pb2, 10 on arduino green LED
-.equ LED_WALK  = PORTD7              ;  d7 on arduino traffic LED, not portb
-.equ BUTTON_P  = PIND2               ;  pind2, button input
+; --- Constants: Timer Configuration (Timer1 CTC Mode, Prescaler 256) ---
+.equ T1_PRESCALER = (1<<CS12)|(0<<CS11)|(0<<CS10) ; clk/256
+.equ T1_OCR1A_VAL      = 15624 ; Target count for ~0.25 sec interrupt (16M/256 * 0.25 - 1)
+.equ TICKS_PER_SECOND  = 4                     ; Number of timer interrupts per second
 
-;global vars
-; -----------------------------------------------------------------------------
-.def currentstateReg  = r18    ; current state of light val
-.def  phaseReg = r19    ;how many ticks left in curr state
-.def walkFlagReg= r20    ;register for button press
-.def tickFlagReg = r21      ;.25s using ctc mode
-.def temp = r16     ;temp register
-;---------------------------------------------------
+; --- Constants: Calculate Ticks from Seconds ---
+.equ GREEN_TICKS     = GREEN_TIME_S * TICKS_PER_SECOND
+.equ YELLOW_TICKS    = YELLOW_TIME_S * TICKS_PER_SECOND
+.equ ALL_RED_TICKS   = ALL_RED_TIME_S * TICKS_PER_SECOND
+.equ WALK_SOLID_TICKS= WALK_SOLID_S * TICKS_PER_SECOND
+.equ BLINK_TICKS     = BLINK_TIME_S * TICKS_PER_SECOND
+.equ POST_WALK_TICKS = POST_WALK_S * TICKS_PER_SECOND
 
-;:Vector table
-;---------------------------------------------------
+; --- Constants: State Definitions ---
+.equ STATE_MAIN_GREEN      = 0                 ; Main Green, Cross Red
+.equ STATE_MAIN_YELLOW     = 1                 ; Main Yellow, Cross Red
+.equ STATE_ALL_RED_1       = 2                 ; All Red after Main Yellow
+.equ STATE_CROSS_GREEN     = 3                 ; Main Red, Cross Green
+.equ STATE_CROSS_YELLOW    = 4                 ; Main Red, Cross Yellow
+.equ STATE_ALL_RED_2       = 5                 ; All Red after Cross Yellow
+; Main Crosswalk States
+.equ STATE_MAIN_XW_SOLID   = 6
+.equ STATE_MAIN_XW_BLINK   = 7
+.equ STATE_MAIN_XW_END     = 8
+; Crossing Crosswalk States
+.equ STATE_CROSS_XW_SOLID  = 9
+.equ STATE_CROSS_XW_BLINK  = 10
+.equ STATE_CROSS_XW_END    = 11
 
-.org      0x0000
-          rjmp    gpio_setup
+; --- Constants: Pin Definitions ---
+; Port B: Main Traffic Light LEDs (Lane 1)
+.equ LED1_PORT     = PORTB
+.equ LED1_DDR      = DDRB
+.equ RED1_PIN      = PB3
+.equ YELLOW1_PIN   = PB2
+.equ GREEN1_PIN    = PB1
+.equ WALK1_PIN     = PB0
+; Port D: Crossing Traffic Light LEDs (Lane 2) & Buttons
+; *** LEDs moved to PD4-PD7 to avoid conflict with Buttons on PD2/PD3 ***
+.equ LED2_PORT     = PORTD                  ; <- MODIFIED
+.equ LED2_DDR      = DDRD                   ; <- MODIFIED
+.equ RED2_PIN      = PD7                    ; <- MODIFIED
+.equ YELLOW2_PIN   = PD6                    ; <- MODIFIED
+.equ GREEN2_PIN    = PD5                    ; <- MODIFIED
+.equ WALK2_PIN     = PD4                    ; <- MODIFIED
+; Buttons on PORTD
+.equ BUTTON_PORT   = PORTD
+.equ BUTTON_PINREG = PIND
+.equ BUTTON_DDR    = DDRD
+.equ BUTTON1_PIN   = PD2                    ; INT0 pin (Remains PD2)
+.equ BUTTON2_PIN   = PD3                    ; INT1 pin (Remains PD3)
 
+; --- Register Definitions (.def) ---
+.def temp          = r16
+.def tick_counter  = r17
+.def flags         = r18 ; REGISTER r18
+.def state_reg     = r19 ; REGISTER r19
 
-          
+; --- Bit definitions for 'flags' register (r18) ---
+.equ FLAG_CROSSWALK_REQ1  = 0
+.equ FLAG_CROSSWALK_REQ2  = 1
+.equ FLAG_BLINK_STATE     = 2
+.equ FLAG_DEBOUNCE1_BUSY  = 3
+.equ FLAG_DEBOUNCE2_BUSY  = 4
+
+;=========================================================================
+; Vector Table
+;=========================================================================
+
+.org 0x0000
+    rjmp  RESET
+.org INT0addr
+    rjmp  EXT_INT0_ISR
+.org INT1addr
+    rjmp  EXT_INT1_ISR
 .org OC1Aaddr
-rjmp tm1_ISR  
+    rjmp  TIMER1_COMPA_ISR
+
 .org INT_VECTORS_SIZE
+;-------------------------------------------------------------------------
 
-;---------------------------------------------------
-gpio_setup:
-;---------------------------------------------------
-;config the output for pb0-3 into temp using 
-;bitshift wise operator
-ldi  temp, (1<<LED_RED) | (1<<LED_YEL) | (1<<LED_GRN)
-out  DDRB, temp    ;set bits ready for outputs
+;=========================================================================
+; Main Program
+;=========================================================================
+RESET:
+; Initialize Stack Pointer
+    ldi   temp, low(RAMEND)
+    out   SPL, temp
+    ldi   temp, high(RAMEND)
+    out   SPH, temp
 
-sbi  DDRD, LED_WALK      ;led on
-cbi  PORTD, LED_WALK    ;led off
+; Clear state variables/flags registers
+    clr   state_reg
+    clr   tick_counter
+    clr   flags
 
-;---------------------------------------------------
-;config button for pull up
-;---------------------------------------------------
+; Call setup routines
+    rcall io_init
+    rcall timer1_init
+    rcall interrupts_init
 
-cbi DDRD, BUTTON_P      ;button in, if 0
-sbi  PORTD, BUTTON_P      ;enable pull up if set, ie 1
+; Set initial state
+    ldi   state_reg, STATE_MAIN_GREEN
+    ldi   tick_counter, GREEN_TICKS
+    rcall update_lights
 
-;---------------------------------------------------
-;ctc mode 
-;
-;Load TCCR1A & TCCR1B
-          clr       temp
-          sts       TCCR1A, temp   
-          ldi       temp, (1<<WGM12) | CLK_256     ;actual ctc model, set when equal to 1, waveform gen
-          sts       TCCR1B, temp
- 
-;Load OCR1AH:OCR1AL with stop count
-          ldi       temp, HIGH(TM_QTR)              ;load OCR1AH value in
-          sts         OCR1AH, temp                   ;CTC mode
-          ldi         temp, LOW(TM_QTR)
-          sts       OCR1AL , temp       ;Load TCNT1H:TCNT1L with initial count
-       ;enable ovi interupt
-          ldi       temp, (1<<OCIE1A)
-          sts       TIMSK1, temp
-
-
-;load current registers
-
-ldi  currentstateReg , ST_RED    ;start sequence in red
-ldi  phaseReg, RED_QTR      ;set the timer for 5s
-clr walkFlagReg    ;no walk can be called yet
-clr  tickFlagReg    ;clr all timer/ tick
-
-sei
-rjmp main_loop
+; Enable Global Interrupts
+    sei
 
 main_loop:
+    rjmp  main_loop
+;-------------------------------------------------------------------------
+
+;=========================================================================
+; Initialization Subroutines
+;=========================================================================
+
+io_init:
+; Desc: Configures Data Direction Registers (DDR) and Pull-ups for I/O.
+;       PORTB = Main LEDs Output
+;       PORTD = Cross LEDs (PD4-7 Output) & Buttons (PD2-3 Input Pullup)
+;-------------------------------------------------------------------------
+
+; --- Configure Main Lane LEDs (PORTB - Output) ---
+; Set PB0, PB1, PB2, PB3 as outputs in DDRB
+    ldi   temp, (1<<RED1_PIN)|(1<<YELLOW1_PIN)|(1<<GREEN1_PIN)|(1<<WALK1_PIN)
+    out   LED1_DDR, temp                  ; Write pattern to DDRB
+
+; Set initial state for Main LEDs (All Off)
+    clr   temp                            ; Load 0 into temp
+    out   LED1_PORT, temp                 ; Write 0 to PORTB
+
+; --- Configure Crossing Lane LEDs (PORTD PD4-PD7 - Output) ---
+; Set PD4, PD5, PD6, PD7 as outputs in DDRD
+; (Leave PD0-PD3 as inputs for now, will be set below)
+    ldi   temp, (1<<RED2_PIN)|(1<<YELLOW2_PIN)|(1<<GREEN2_PIN)|(1<<WALK2_PIN)
+    out   LED2_DDR, temp                  ; Write LED output bits to DDRD (overwrites previous DDRD state)
+                                          ;
+
+; Enable Pull-ups for BUTTON1_PIN(PD2), BUTTON2_PIN(PD3)
+; Set initial state for Crossing LEDs (All Off)
+; Combine setting pull-ups (bit=1) and turning LEDs off (bit=0)
+    ldi   temp, (0<<WALK2_PIN)|(0<<GREEN2_PIN)|(0<<YELLOW2_PIN)|(0<<RED2_PIN) | (1<<BUTTON2_PIN)|(1<<BUTTON1_PIN)
+    out   LED2_PORT, temp                 ; Write combined pattern to PORTD
+
+    ret
+;-------------------------------------------------------------------------
+
+timer1_init:
+; Desc: Configures Timer1 for CTC mode interrupt at ~0.25s.
+;       Uses Prescaler 256.
+;-------------------------------------------------------------------------
+    clr   temp                            ; COM1A/B = 0
+    sts   TCCR1A, temp
+    ldi   temp, (1<<WGM12) | T1_PRESCALER ; Mode 4 (CTC), Prescaler 256
+    sts   TCCR1B, temp
+    ldi   temp, high(T1_OCR1A_VAL)        ; Load OCR1A = 15624
+    sts   OCR1AH, temp
+    ldi   temp, low(T1_OCR1A_VAL)
+    sts   OCR1AL, temp
+    ldi   temp, (1<<OCIE1A)               ; Enable Timer1 OCIE1A
+    sts   TIMSK1, temp
+    ret
+;-------------------------------------------------------------------------
+
+interrupts_init:
+; Desc: Configures and enables Timer1 Compare, INT0, and INT1 interrupts.
+;-------------------------------------------------------------------------
+    ldi   temp, (1<<ISC11)|(0<<ISC10)|(1<<ISC01)|(0<<ISC00) ; INT0/INT1 Falling edge
+    sts   EICRA, temp
+    ldi   temp, (1<<INT1)|(1<<INT0)        ; Enable INT0, INT1
+    out   EIMSK, temp
+    ret
+;-------------------------------------------------------------------------
+
+;=========================================================================
+; Interrupt Service Routines (ISRs)
+;=========================================================================
+
+TIMER1_COMPA_ISR:
+; Desc: Timer1 Compare Match ISR (~0.25s interval). Handles state timing,
+;       blinking logic, and button debounce release.
+; Clobbers: temp (r16), r24, r25, flags (r18), tick_counter (r17), state_reg (r19)
+;-------------------------------------------------------------------------
+    push  temp                           ; Save r16
+    in    temp, SREG                     ; Save SREG
+    push  temp
+    push  r24                            ; Save r24
+    push  r25                            ; Save r25
+
+; --- Debounce Logic ---
+    sbrc  flags, FLAG_DEBOUNCE1_BUSY
+    rcall handle_debounce1
+    sbrc  flags, FLAG_DEBOUNCE2_BUSY
+    rcall handle_debounce2
+
+; --- Blinking Logic ---
+    mov   r24, state_reg ; Copy state (r19) to r24 for compare
+    cpi   r24, STATE_MAIN_XW_BLINK
+    breq  toggle_blink
+    cpi   r24, STATE_CROSS_XW_BLINK
+    breq  toggle_blink
+    rjmp  timer_decr_state              ; Not a blink state
+
+toggle_blink:
+    ldi   r24, (1<<FLAG_BLINK_STATE)    ; Mask in r24
+    eor   flags, r24                    ; eor r18, r24
+    rcall update_lights                 ; Update LEDs immediately
+; Fall through to timer_decr_state
+
+timer_decr_state:
+; --- State Timing Logic ---
+    dec   tick_counter                  ; Decrement r17
+    brne  timer_isr_exit                ; If counter > 0, exit
+
+; --- State Transition Logic (Timer Expired) ---
+    rcall update_state                  ; Updates r19, r17, r18
+    rcall update_lights                 ; Uses r19, r18
+
+timer_isr_exit:
+    pop   r25                           ; Restore registers
+    pop   r24
+    pop   temp                          ; Restore SREG
+    out   SREG, temp
+    pop   temp                          ; Restore r16
+    reti                                ; Return from interrupt
+
+handle_debounce1:
+; Desc: Clears debounce busy flag 1 and robustly re-enables INT0/INT1
+;       based on whether INT1 is currently debouncing.
+; Uses: r24, r25 (clobbered), flags (r18) Modifies: flags (r18), EIMSK
+
+; 1. Clear busy flag 1 in flags (r18)
+    ldi   r25, (1<<FLAG_DEBOUNCE1_BUSY)
+    com   r25                           ; Create mask to clear only bit FLAG_DEBOUNCE1_BUSY
+    and   flags, r25
+
+; 2. Determine desired EIMSK state
+;    Default: Enable both INT0 and INT1
+    ldi   r24, (1<<INT1)|(1<<INT0)
+
+; 3. Check if Button 2 (INT1) is STILL being debounced
+    sbrc  flags, FLAG_DEBOUNCE2_BUSY    ; Skip next instruction if FLAG_DEBOUNCE2_BUSY is CLEAR
+    ldi   r24, (1<<INT0)                ; If Button 2 IS busy, only enable INT0 for now
+
+; 4. Write the determined state to EIMSK
+    sts   EIMSK, r24
+    ret
+
+handle_debounce2:
+; Desc: Clears debounce busy flag 2 and robustly re-enables INT0/INT1
+;       based on whether INT0 is currently debouncing.
+; Uses: r24, r25 (clobbered), flags (r18) Modifies: flags (r18), EIMSK
+
+; 1. Clear busy flag 2 in flags (r18)
+    ldi   r25, (1<<FLAG_DEBOUNCE2_BUSY)
+    com   r25                           ; Create mask to clear only bit FLAG_DEBOUNCE2_BUSY
+    and   flags, r25
+
+; 2. Determine desired EIMSK state
+;    Default: Enable both INT0 and INT1
+    ldi   r24, (1<<INT1)|(1<<INT0)
+
+; 3. Check if Button 1 (INT0) is STILL being debounced
+    sbrc  flags, FLAG_DEBOUNCE1_BUSY    ; Skip next instruction if FLAG_DEBOUNCE1_BUSY is CLEAR
+    ldi   r24, (1<<INT1)                ; If Button 1 IS busy, only enable INT1 for now
+
+; 4. Write the determined state to EIMSK
+    sts   EIMSK, r24
+    ret
+;-------------------------------------------------------------------------
+
+EXT_INT0_ISR: ; Button 1 on PD2 (Main Lane Crosswalk)
+; Desc: Sets request flag 1, handles debouncing start.
+; Clobbers: temp (r16), r24 Modifies: flags (r18), EIMSK
+;-------------------------------------------------------------------------
+    push  temp                          ; r16
+    in    temp, SREG
+    push  temp
+    push  r24                           ; Save r24
+
+    mov   r24, flags                    ; Check if already busy
+    andi  r24, (1<<FLAG_DEBOUNCE1_BUSY)
+    brne  int0_exit                     ; If busy, exit
+
+    lds   r24, EIMSK                    ; Disable INT0 temporarily
+    andi  r24, ~(1<<INT0)
+    sts   EIMSK, r24
+
+    ldi   r24, (1<<FLAG_DEBOUNCE1_BUSY)|(1<<FLAG_CROSSWALK_REQ1) ; Mask for bits to set
+    or    flags, r24                    ; OR flags (r18) with mask
+
+int0_exit:
+    pop   r24                           ; Restore r24
+    pop   temp                          ; Restore SREG
+    out   SREG, temp
+    pop   temp                          ; Restore r16
+    reti
+;-------------------------------------------------------------------------
+
+EXT_INT1_ISR: ; Button 2 on PD3 (Crossing Lane Crosswalk)
+; Desc: Sets request flag 2, handles debouncing start.
+; Clobbers: temp (r16), r24 Modifies: flags (r18), EIMSK
+;-------------------------------------------------------------------------
+    push  temp                          ; r16
+    in    temp, SREG
+    push  temp
+    push  r24                           ; Save r24
+
+    mov   r24, flags                    ; Check if already busy
+    andi  r24, (1<<FLAG_DEBOUNCE2_BUSY)
+    brne  int1_exit                     ; If busy, exit
+
+    lds   r24, EIMSK                    ; Disable INT1 temporarily
+    andi  r24, ~(1<<INT1)
+    sts   EIMSK, r24
+
+    ldi   r24, (1<<FLAG_DEBOUNCE2_BUSY)|(1<<FLAG_CROSSWALK_REQ2) ; Mask for bits to set
+    or    flags, r24                    ; OR flags (r18) with mask
+
+int1_exit:
+    pop   r24                           ; Restore r24
+    pop   temp                          ; Restore SREG
+    out   SREG, temp
+    pop   temp                          ; Restore r16
+    reti
+;-------------------------------------------------------------------------
 
 
-;ceck if putton is low, pressed, set the ped flag
-sbis          PIND, BUTTON_P                    ;if its set, skip the next instruction
-ldi          walkFlagReg ,1                     ; executes when pind is pulled low, 0
-dec           phaseReg                            ;decrease countdowtjmer
-brne          main_loop
-;Phase timer, timer left in this light, reached zero, branch based on current state, 
-  cpi currentstateReg, ST_RED
-  breq red_done
-  cpi currentstateReg, ST_GREEN
-  breq green_done
-  cpi currentstateReg, ST_YELLOW
-  breq yellow_done
-  rjmp walk_done                     ; otherwise we must be in walk
+;=========================================================================
+; State Logic and Helper Subroutines
+;=========================================================================
 
-red_done:
-          tst          walkFlagReg                    ; was the ped requested
-          breq to_green                    ;if not go to green
-; if so enter walk phase
-  clr walkFlagReg                    ; clear request
-  ldi currentstateReg, ST_WALK              ; update state
-  ldi phaseReg, WALK_QTR             ; set walk time
-  sbi PORTB, LED_RED                 ; keep red on 
-  sbi PORTD, LED_WALK                ; turn on pedestrian led
-  rjmp main_loop                     ; back to main 
+update_state:
+; Desc: Determines next state based on current state (r19) and flags (r18).
+;       Loads ticks (r17) for the new state.
+; Uses: state_reg (r19), flags (r18)
+; Modifies: state_reg (r19), tick_counter (r17), flags (r18)
+; Clobbers: temp (r16)
+;-------------------------------------------------------------------------
+    cpi   state_reg, STATE_MAIN_GREEN
+    breq  next_state_MG
+    cpi   state_reg, STATE_MAIN_YELLOW
+    breq  next_state_MY
+    cpi   state_reg, STATE_ALL_RED_1
+    breq  next_state_AR1
+    cpi   state_reg, STATE_CROSS_GREEN
+    breq  next_state_CG
+    cpi   state_reg, STATE_CROSS_YELLOW
+    breq  next_state_CY
+    cpi   state_reg, STATE_ALL_RED_2
+    breq  next_state_AR2
+    cpi   state_reg, STATE_MAIN_XW_SOLID
+    breq  next_state_MXS
+    cpi   state_reg, STATE_MAIN_XW_BLINK
+    breq  next_state_MXB
+    cpi   state_reg, STATE_MAIN_XW_END
+    breq  next_state_MXE
+    cpi   state_reg, STATE_CROSS_XW_SOLID
+    breq  next_state_CXS
+    cpi   state_reg, STATE_CROSS_XW_BLINK
+    breq  next_state_CXB
+    cpi   state_reg, STATE_CROSS_XW_END
+    breq  next_state_CXE
+    rjmp  next_state_AR2      ; Default/Error case
 
+next_state_MG:
+    ldi   state_reg, STATE_MAIN_YELLOW
+    ldi   tick_counter, YELLOW_TICKS
+    ret
+next_state_MY:
+    ldi   state_reg, STATE_ALL_RED_1
+    ldi   tick_counter, ALL_RED_TICKS
+    ret
+next_state_AR1:
+    sbrc  flags, FLAG_CROSSWALK_REQ2
+    rjmp  start_cross_xw
+    ldi   state_reg, STATE_CROSS_GREEN
+    ldi   tick_counter, GREEN_TICKS
+    ret
+next_state_CG:
+    ldi   state_reg, STATE_CROSS_YELLOW
+    ldi   tick_counter, YELLOW_TICKS
+    ret
+next_state_CY:
+    ldi   state_reg, STATE_ALL_RED_2
+    ldi   tick_counter, ALL_RED_TICKS
+    ret
+next_state_AR2:
+    sbrc  flags, FLAG_CROSSWALK_REQ1
+    rjmp  start_main_xw
+    ldi   state_reg, STATE_MAIN_GREEN
+    ldi   tick_counter, GREEN_TICKS
+    ret
+start_main_xw:
+    ldi   temp, (1<<FLAG_CROSSWALK_REQ1) ; Clear Req1 flag
+    com   temp
+    and   flags, temp
+    ldi   state_reg, STATE_MAIN_XW_SOLID
+    ldi   tick_counter, WALK_SOLID_TICKS
+    ret
+start_cross_xw:
+    ldi   temp, (1<<FLAG_CROSSWALK_REQ2) ; Clear Req2 flag
+    com   temp
+    and   flags, temp
+    ldi   state_reg, STATE_CROSS_XW_SOLID
+    ldi   tick_counter, WALK_SOLID_TICKS
+    ret
+next_state_MXS:
+    ldi   state_reg, STATE_MAIN_XW_BLINK
+    ldi   tick_counter, BLINK_TICKS
+    ret
+next_state_MXB:
+    ldi   state_reg, STATE_MAIN_XW_END
+    ldi   tick_counter, POST_WALK_TICKS
+    ret
+next_state_MXE:
+    ldi   state_reg, STATE_ALL_RED_1
+    ldi   tick_counter, ALL_RED_TICKS
+    ret
+next_state_CXS:
+    ldi   state_reg, STATE_CROSS_XW_BLINK
+    ldi   tick_counter, BLINK_TICKS
+    ret
+next_state_CXB:
+    ldi   state_reg, STATE_CROSS_XW_END
+    ldi   tick_counter, POST_WALK_TICKS
+    ret
+next_state_CXE:
+    ldi   state_reg, STATE_ALL_RED_2
+    ldi   tick_counter, ALL_RED_TICKS
+    ret
+;-------------------------------------------------------------------------
 
-;switch light to green after red
-to_green:
-cbi PORTB, LED_RED                     ;turn off red led
-ldi currentstateReg, ST_GREEN                              ;set state to green 
-ldi phaseReg, GREEN_QTR         ;time for green
-sbi PORTB, LED_GRN                    ;turn on green led
-rjmp main_loop                              
- 
-green_done:
-cbi PORTB, LED_GRN                    ;turn off green led
-sbi       PORTB, LED_YEL
-ldi currentstateReg, ST_YELLOW                              ;set state to yellow
-ldi phaseReg, YEL_QTR                    ;set time for yellow dureation
-rjmp main_loop
+update_lights:
+; Desc: Sets LED outputs on LED1_PORT (PORTB) and LED2_PORT (PORTD)
+;       based on current state (r19) and blink flag (in r18).
+; Uses: state_reg (r19), flags (r18)
+; Modifies: LED1_PORT (PORTB), LED2_PORT (PORTD)
+; Clobbers: r20, r21
+;-------------------------------------------------------------------------
+    push  r20                           ; Save registers used locally
+    push  r21                           
+    clr   r20                           ; r20 = pattern for PORTB (Main)
+    clr   r21                           ; r21 = pattern for PORTD (Crossing)
 
-yellow_done:
-cbi        PORTB, LED_YEL                    ;turn off yellow led
-ldi currentstateReg, ST_RED                    ; go back to red
-ldi phaseReg, RED_QTR                    ;set duration for red 5s
-sbi PORTB, LED_RED
-rjmp main_loop
+    cpi   state_reg, STATE_MAIN_GREEN
+    breq  set_MG_lights
+    cpi   state_reg, STATE_MAIN_YELLOW
+    breq  set_MY_lights
+    cpi   state_reg, STATE_ALL_RED_1
+    breq  set_AR_lights
+    cpi   state_reg, STATE_CROSS_GREEN
+    breq  set_CG_lights
+    cpi   state_reg, STATE_CROSS_YELLOW
+    breq  set_CY_lights
+    cpi   state_reg, STATE_ALL_RED_2
+    breq  set_AR_lights
+    cpi   state_reg, STATE_MAIN_XW_SOLID
+    breq  set_MXS_lights
+    cpi   state_reg, STATE_MAIN_XW_BLINK
+    breq  set_MXB_lights
+    cpi   state_reg, STATE_MAIN_XW_END
+    breq  set_AR_lights
+    cpi   state_reg, STATE_CROSS_XW_SOLID
+    breq  set_CXS_lights
+    cpi   state_reg, STATE_CROSS_XW_BLINK
+    breq  set_CXB_lights
+    cpi   state_reg, STATE_CROSS_XW_END
+    breq  set_AR_lights
+    rjmp  write_patterns                        ; Default
 
+set_MG_lights: ; Main Green (PORTB), Cross Red (PORTD)
+    sbr   r20, (1<<GREEN1_PIN)                  ; Set GREEN1 bit in r20
+    sbr   r21, (1<<RED2_PIN)                    ; Set RED2 bit (PD4) in r21
+    rjmp  write_patterns
+set_MY_lights: ; Main Yellow (PORTB), Cross Red (PORTD)
+    sbr   r20, (1<<YELLOW1_PIN)                 ; Set YELLOW1 bit in r20
+    sbr   r21, (1<<RED2_PIN)                    ; Set RED2 bit (PD4) in r21
+    rjmp  write_patterns
+set_AR_lights: ; All Red (PORTB & PORTD)
+    sbr   r20, (1<<RED1_PIN)                    ; Set RED1 bit in r20
+    sbr   r21, (1<<RED2_PIN)                    ; Set RED2 bit (PD4) in r21
+    rjmp  write_patterns
+set_CG_lights: ; Main Red (PORTB), Cross Green (PORTD)
+    sbr   r20, (1<<RED1_PIN)                    ; Set RED1 bit in r20
+    sbr   r21, (1<<GREEN2_PIN)                  ; Set GREEN2 bit (PD6) in r21
+    rjmp  write_patterns
+set_CY_lights: ; Main Red (PORTB), Cross Yellow (PORTD)
+    sbr   r20, (1<<RED1_PIN)                    ; Set RED1 bit in r20
+    sbr   r21, (1<<YELLOW2_PIN)                 ; Set YELLOW2 bit (PD5) in r21
+    rjmp  write_patterns
+set_MXS_lights: ; All Red, Main Walk Solid ON (PORTB)
+    sbr   r20, (1<<RED1_PIN)|(1<<WALK1_PIN)     ; Set RED1, WALK1 bits in r20
+    sbr   r21, (1<<RED2_PIN)                    ; Set RED2 bit (PD4) in r21
+    rjmp  write_patterns
+set_MXB_lights: ; All Red, Main Walk Blinking (PORTB)
+    sbr   r20, (1<<RED1_PIN)                    ; Set RED1 bit in r20
+    sbr   r21, (1<<RED2_PIN)                    ; Set RED2 bit (PD4) in r21
+    sbrc  flags, FLAG_BLINK_STATE               ; Check blink flag in r18
+    sbr   r20, (1<<WALK1_PIN)                   ; Set WALK1 bit in r20 if flag is 1
+    rjmp  write_patterns
+set_CXS_lights: ; All Red, Cross Walk Solid ON (PORTD)
+    sbr   r20, (1<<RED1_PIN)                    ; Set RED1 bit in r20
+    sbr   r21, (1<<RED2_PIN)|(1<<WALK2_PIN)     ; Set RED2(PD4), WALK2(PD7) bits in r21
+    rjmp  write_patterns
+set_CXB_lights: ; All Red, Cross Walk Blinking (PORTD)
+    sbr   r20, (1<<RED1_PIN)                    ; Set RED1 bit in r20
+    sbr   r21, (1<<RED2_PIN)                    ; Set RED2 bit (PD4) in r21
+    sbrc  flags, FLAG_BLINK_STATE               ; Check blink flag in r18
+    sbr   r21, (1<<WALK2_PIN)                   ; Set WALK2 bit (PD7) in r21 if flag is 1
+    rjmp  write_patterns
 
-walk_done:
-cbi PORTB, LED_RED                    ;turn off red led
-cbi          PORTD, LED_WALK                    ;turn off led for ped
-ldi currentstateReg, ST_GREEN                              ;go to green state
-ldi phaseReg, GREEN_QTR                    ;set green duration
-sbi PORTB, LED_GRN                    ;turn on green led
+write_patterns:
+; r20 contains the pattern for PORTB (Main LEDs)
+; r21 contains the pattern for PORTD LEDs (PD4-PD7), with PD0-PD3 currently 0
 
+; --- PRESERVE PULL-UPS ON PORTD ---
+; Before writing r21 to PORTD, ensure bits for button pull-ups (PD2, PD3) are set to 1.
+; We can do this by ORing r21 with a mask for the button pins.
+    ori   r21, (1<<BUTTON2_PIN)|(1<<BUTTON1_PIN)
+; Now r21 contains the correct state for LEDs (PD4-7) AND ensures PD2/PD3 are HIGH for pull-ups.
 
+; --- Write patterns to physical ports ---
+    out   LED1_PORT, r20                       ; Write r20 to PORTB
+    out   LED2_PORT, r21                       ; Write modified r21 (LEDs + Pull-ups) to PORTD
 
-;so for the isr we will just set the timer flag 
+    pop   r21                                  ; Restore registers
+    pop   r20
+    ret
+;-------------------------------------------------------------------------
+;-------------------------------------------------------------------------
 
-tm1_ISR:
-ldi tickFlagReg , 1                              ;
-reti
-
-
-
-
-
-
-
+;=========================================================================
+; End of Program
+;=========================================================================
