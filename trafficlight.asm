@@ -9,7 +9,7 @@
 ;          Main LEDs on PORTB, Crossing LEDs on PORTD (PD4-PD7).
 ;          Implements R-Y-G sequence with All-Red phases.
 ;          Pedestrian walk lights blink for the second half.
-;          Uses Timer1 CTC interrupt with Prescaler 256.
+;          Uses Timer1 CTC interrupt with Prescaler 256
 ;=========================================================================
 
 
